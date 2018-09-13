@@ -1,0 +1,5 @@
+/thermald
+/thermald.debug
+/thermald.full
+*.o
+.depend*
