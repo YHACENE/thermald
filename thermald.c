@@ -111,7 +111,6 @@ main(int argc, char *argv[])
 		    &fanlvl, 4) < 0)
 			err(1, "failed to set fan level");
 
-		printf("temp: %d, fan lvl: %d\n", currtemp, fanlvl);
 		sleep(2);
 	}
 
