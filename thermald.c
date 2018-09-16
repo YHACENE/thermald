@@ -1,6 +1,8 @@
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #include <err.h>
+#include <errno.h>
+#include <libutil.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <strings.h>
@@ -30,11 +32,34 @@ static struct TempLevel temp_levels[] = { { .temp = 80, .level = 7 },
 static const size_t temp_levels_size = sizeof(temp_levels)
     / sizeof(temp_levels[0]);
 
-const char	*procname;
-int		fanctl_state_orig = FANCTL_AUTOMATIC;
-size_t		fanctl_state_orig_size = sizeof(fanctl_state_orig);
-int		mib_fanctl[MIB_LEN_FANCTL];
-size_t		mib_len_fanctl;
+struct pidfh	*pfh;
+int		 fanctl_state_orig = FANCTL_AUTOMATIC;
+size_t		 fanctl_state_orig_size = sizeof(fanctl_state_orig);
+int		 mib_fanctl[MIB_LEN_FANCTL];
+size_t		 mib_len_fanctl;
+
+static void
+rmpidfile(void)
+{
+	if (pidfile_remove(pfh) < 0)
+		warn("pidfile_remove");
+}
+
+static void
+pidfile(void)
+{
+	int otherpid;
+
+	pfh = pidfile_open("/var/run/thermald.pid", 0600, &otherpid);
+	if (pfh == NULL) {
+		if (errno == EEXIST)
+			errx(1, "already running as %jd", (intmax_t)otherpid);
+		err(1, "pidfile_open");
+	}
+	if (pidfile_write(pfh) < 0)
+		warn("pidfile_write");
+	atexit(rmpidfile);
+}
 
 static void
 sighandler(int signum)
@@ -47,20 +72,48 @@ sighandler(int signum)
 		if (sysctl(&mib_fanctl[0], MIB_LEN_FANCTL, NULL, NULL,
 		    &fanctl_state_orig, fanctl_state_orig_size) < 0)
 			err(1, "failed to restore original fan state");
+		fprintf(stderr, "exiting\n");
 		exit(0);
 		break;
 	}
 }
 
+static void __dead2
+usage(void)
+{
+	fprintf(stderr, "usage: %s [-d]\n", getprogname());
+	exit(1);
+}
+
 int
 main(int argc, char *argv[])
 {
-	struct sigaction	sigact;
+	struct pidfh		*pfh;
+	struct sigaction	 sigact;
 	size_t	mib_len_fanlvl, mib_len_temp;
 	int	mib_fanlvl[MIB_LEN_FANLVL], mib_temp[MIB_LEN_TEMP];
-	int	fanctl_state;
+	int	c, fanctl_state, nodaemon;
 
-	procname = argv[0];
+	nodaemon = 0;
+	while ((c = getopt(argc, argv, "d")) != -1) {
+		switch (c) {
+		case 'd':
+			nodaemon = 1;
+			break;
+		default:
+			usage();
+		}
+	}
+	argc -= optind;
+	argv += optind;
+
+	if (!nodaemon) {
+		if (daemon(0, 0) < 0) {
+			err(1, "daemon");
+		}
+		pidfile();
+	}
+
 	/* retrieve MIBs for the sysctls */
 	mib_len_fanctl = MIB_LEN_FANCTL;
 	if (sysctlnametomib("dev.acpi_ibm.0.fan", &mib_fanctl[0],
